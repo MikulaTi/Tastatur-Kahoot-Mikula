@@ -1,0 +1,1652 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>TypeBattle — Live-Tippspiel</title>
+
+<!--
+═══════════════════════════════════════════════════════════════════════════════
+  TypeBattle — Live-Tippspiel im Kahoot-Stil
+  ──────────────────────────────────────────
+  Speziell für 10-Finger-Training, didaktisch aufsteigend:
+  Grundreihe → Oberreihe → Unterreihe → Großbuchstaben → Mix.
+
+  ──────────────── EINMALIGE EINRICHTUNG (≈5 Min) ────────────────
+  1. Auf  https://console.firebase.google.com  ein neues Projekt erstellen
+     (z.B. "typebattle"). Kostenloser Spark-Plan reicht aus.
+  2. Im Projekt links auf "Build" → "Realtime Database" → "Datenbank erstellen"
+     → Region "europe-west1" → "Im Testmodus starten" (30 Tage offen, danach
+     Regeln anpassen — siehe Hinweis ganz unten).
+  3. In den Projekteinstellungen (Zahnrad oben links) → "Allgemein" → unten
+     "Web-App hinzufügen" (</> Symbol). Den firebaseConfig-Block kopieren
+     und unten in dieser Datei (Zeile ~25) einsetzen.
+  4. Datei online stellen: GitHub Pages, Netlify Drop (netlify.com/drop —
+     einfach reinziehen), Vercel oder eigener Webspace. Lokale file://-URLs
+     funktionieren NICHT, weil die Schüler*innen die Seite ja erreichen müssen.
+  5. Lehrer-Gerät öffnet die URL → "Spiel starten (Host)" → QR-Code wird
+     angezeigt → Schüler scannen → fertig.
+
+  ──────────────── DATENBANK-REGELN (nach 30 Tagen) ────────────────
+  In Firebase → Realtime Database → "Regeln" einfügen:
+    {
+      "rules": {
+        "rooms": {
+          "$roomId": {
+            ".read": true,
+            ".write": true,
+            ".validate": "$roomId.matches(/^[A-Z0-9]{4}$/)"
+          }
+        }
+      }
+    }
+═══════════════════════════════════════════════════════════════════════════════
+-->
+
+<style>
+  /* ═══════════════════ DESIGN-TOKENS ═══════════════════ */
+  :root {
+    --bg:        #0f1117;
+    --bg-deep:   #07080c;
+    --surface:   #1a1d28;
+    --surface-2: #242837;
+    --border:    #2f3447;
+    --text:      #f0f1f7;
+    --text-dim:  #8b91a8;
+    --accent:    #ffd60a;          /* Senf-Gelb, Arcade-Vibe */
+    --accent-2:  #ff4d6d;          /* Korall für Akzente */
+    --good:      #4ade80;
+    --bad:       #f87171;
+    --p1: #ff4d6d; --p2: #ffd60a; --p3: #4ade80; --p4: #38bdf8;
+    --p5: #c084fc; --p6: #fb923c; --p7: #f472b6; --p8: #2dd4bf;
+
+    --font-display: "Bricolage Grotesque", "Space Grotesk", system-ui, sans-serif;
+    --font-mono:    "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+    --font-body:    "Inter", system-ui, sans-serif;
+  }
+
+  @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Subtiles Grid-Hintergrund-Muster für Arcade-Atmosphäre */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Glühender Rand-Effekt */
+  body::after {
+    content: '';
+    position: fixed;
+    top: -50%; left: -50%; width: 200%; height: 200%;
+    background: radial-gradient(circle at 30% 20%, rgba(255,77,109,0.08), transparent 40%),
+                radial-gradient(circle at 70% 80%, rgba(255,214,10,0.06), transparent 40%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app { position: relative; z-index: 1; min-height: 100vh; }
+
+  /* ═══════════════════ START-SCREEN ═══════════════════ */
+  .start {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+  }
+
+  .logo {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: clamp(3rem, 9vw, 7rem);
+    line-height: 0.9;
+    letter-spacing: -0.04em;
+    margin-bottom: 0.5rem;
+  }
+  .logo .type { color: var(--text); }
+  .logo .battle {
+    color: var(--accent);
+    display: inline-block;
+    transform: rotate(-3deg) translateY(0.1em);
+  }
+  .logo .dot {
+    display: inline-block;
+    width: 0.3em; height: 0.3em;
+    background: var(--accent-2);
+    border-radius: 50%;
+    margin-left: 0.15em;
+    vertical-align: 0.5em;
+  }
+
+  .tagline {
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    color: var(--text-dim);
+    margin-bottom: 3rem;
+    letter-spacing: 0.05em;
+  }
+  .tagline::before { content: '> '; color: var(--accent); }
+
+  .role-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    width: 100%;
+    max-width: 720px;
+  }
+
+  .role {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 16px;
+    padding: 2rem 1.5rem;
+    cursor: pointer;
+    transition: transform 0.15s, border-color 0.15s, background 0.15s;
+    text-align: left;
+    color: inherit;
+    font-family: inherit;
+    font-size: inherit;
+  }
+  .role:hover {
+    transform: translateY(-4px);
+    border-color: var(--accent);
+    background: var(--surface-2);
+  }
+  .role h2 {
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.02em;
+  }
+  .role p { color: var(--text-dim); font-size: 0.95rem; line-height: 1.5; }
+  .role .icon {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    display: inline-block;
+  }
+  .role.host .icon { color: var(--accent); }
+  .role.player .icon { color: var(--accent-2); }
+
+  /* ═══════════════════ HOST: LOBBY ═══════════════════ */
+  .lobby {
+    min-height: 100vh;
+    padding: 2rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    align-items: center;
+  }
+  @media (max-width: 900px) {
+    .lobby { grid-template-columns: 1fr; }
+  }
+
+  .lobby-info {
+    text-align: center;
+  }
+  .room-label {
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+  }
+  .room-code {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: clamp(4rem, 12vw, 9rem);
+    letter-spacing: 0.05em;
+    color: var(--accent);
+    line-height: 1;
+    text-shadow: 0 0 60px rgba(255, 214, 10, 0.4);
+    margin-bottom: 1.5rem;
+  }
+  .qr-wrap {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 16px;
+    display: inline-block;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .qr-wrap img, .qr-wrap canvas { display: block; }
+  .qr-hint {
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    margin-top: 1rem;
+    font-family: var(--font-mono);
+  }
+
+  .lobby-players {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 16px;
+    padding: 2rem;
+    min-height: 60vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .lobby-players h2 {
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .player-count {
+    background: var(--accent);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    padding: 0.2rem 0.7rem;
+    border-radius: 999px;
+    font-size: 1rem;
+  }
+  .player-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.6rem;
+    flex: 1;
+    align-content: start;
+  }
+  .player-chip {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.7rem 1rem;
+    font-weight: 600;
+    text-align: center;
+    animation: pop 0.3s ease-out;
+    border-left: 4px solid var(--p1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @keyframes pop {
+    from { transform: scale(0.5); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+  }
+
+  .start-game-btn {
+    margin-top: 1.5rem;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 12px;
+    padding: 1.1rem 2rem;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.15s;
+    letter-spacing: -0.01em;
+  }
+  .start-game-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px rgba(255, 214, 10, 0.3);
+  }
+  .start-game-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* ═══════════════════ JOIN-SCREEN (PLAYER) ═══════════════════ */
+  .join {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+  }
+  .join h1 {
+    font-family: var(--font-display);
+    font-size: 2.5rem;
+    margin-bottom: 0.5rem;
+  }
+  .join h1 span { color: var(--accent); }
+  .join .room-pill {
+    font-family: var(--font-mono);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 0.4rem 1rem;
+    border-radius: 999px;
+    margin-bottom: 2rem;
+    color: var(--text-dim);
+  }
+  .join .room-pill strong { color: var(--accent); letter-spacing: 0.1em; }
+
+  .input-group {
+    width: 100%;
+    max-width: 380px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .input-group input {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 1.1rem 1.3rem;
+    font-size: 1.2rem;
+    color: var(--text);
+    font-family: var(--font-body);
+    text-align: center;
+    transition: border-color 0.15s;
+  }
+  .input-group input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .input-group .room-input {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+  }
+  .input-group button {
+    background: var(--accent-2);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 1.1rem;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1.15rem;
+    cursor: pointer;
+    transition: transform 0.1s;
+  }
+  .input-group button:hover:not(:disabled) { transform: translateY(-2px); }
+  .input-group button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .err {
+    color: var(--bad);
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+    min-height: 1.2em;
+  }
+
+  /* ═══════════════════ WAITING (PLAYER) ═══════════════════ */
+  .waiting {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+  }
+  .waiting .you {
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    font-size: 0.85rem;
+  }
+  .waiting .name {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 2.5rem;
+    color: var(--accent);
+    margin-bottom: 2rem;
+  }
+  .waiting .msg {
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .pulse-dot {
+    display: inline-block;
+    width: 12px; height: 12px;
+    background: var(--good);
+    border-radius: 50%;
+    margin-right: 0.5rem;
+    animation: pulse 1.2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+  }
+
+  /* ═══════════════════ GAME-SCREEN ═══════════════════ */
+  .game {
+    min-height: 100vh;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    max-width: 900px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  .game-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .round-info {
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    letter-spacing: 0.1em;
+  }
+  .round-info strong { color: var(--accent); font-size: 1.1rem; }
+  .timer {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 2rem;
+    color: var(--accent);
+    background: var(--surface);
+    padding: 0.4rem 1rem;
+    border-radius: 12px;
+    border: 2px solid var(--border);
+    min-width: 80px;
+    text-align: center;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .timer.warn { color: var(--accent-2); border-color: var(--accent-2); animation: shake 0.4s infinite; }
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    25% { transform: translateX(-2px); }
+    75% { transform: translateX(2px); }
+  }
+
+  .lesson-tag {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 0.3rem 0.7rem;
+    border-radius: 6px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+  }
+
+  .target-text {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 16px;
+    padding: 2rem 1.8rem;
+    font-family: var(--font-mono);
+    font-size: clamp(1.2rem, 3vw, 1.7rem);
+    line-height: 1.8;
+    letter-spacing: 0.02em;
+    word-break: break-word;
+  }
+  .target-text .ch {
+    transition: color 0.05s, background 0.05s;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  .target-text .ch.done   { color: var(--good); }
+  .target-text .ch.wrong  { color: var(--bad); background: rgba(248,113,113,0.18); text-decoration: underline wavy var(--bad); }
+  .target-text .ch.cur    { background: var(--accent); color: var(--bg); animation: blink 1s infinite; }
+  .target-text .ch.todo   { color: var(--text-dim); }
+  @keyframes blink {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+
+  .input-area {
+    background: var(--bg-deep);
+    border: 2px solid var(--accent);
+    border-radius: 16px;
+    padding: 1.5rem;
+    box-shadow: 0 0 30px rgba(255, 214, 10, 0.1);
+  }
+  .input-area textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: clamp(1.1rem, 2.6vw, 1.5rem);
+    line-height: 1.6;
+    resize: none;
+    outline: none;
+    min-height: 3rem;
+  }
+  .input-area textarea::placeholder { color: var(--text-dim); }
+  .input-area textarea:disabled { opacity: 0.5; }
+
+  .progress-bar {
+    height: 6px;
+    background: var(--surface-2);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 1rem;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: 999px;
+    transition: width 0.1s linear;
+    width: 0%;
+  }
+
+  .live-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.8rem;
+    text-align: center;
+  }
+  .stat {
+    background: var(--surface);
+    border-radius: 10px;
+    padding: 0.7rem;
+    border: 1px solid var(--border);
+  }
+  .stat .v { font-family: var(--font-display); font-weight: 800; font-size: 1.4rem; color: var(--accent); }
+  .stat .l { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.2rem; }
+
+  .done-msg {
+    text-align: center;
+    padding: 2rem;
+    background: var(--surface);
+    border-radius: 16px;
+    border: 2px solid var(--good);
+  }
+  .done-msg h2 { font-family: var(--font-display); font-size: 2rem; margin-bottom: 0.5rem; }
+  .done-msg .points { font-size: 3rem; color: var(--accent); font-weight: 800; }
+
+  /* ═══════════════════ HOST GAME-VIEW (BEAMER) ═══════════════════ */
+  .host-game {
+    min-height: 100vh;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  .host-game .target-text { font-size: clamp(1.5rem, 3.5vw, 2.4rem); }
+  .progress-list {
+    background: var(--surface);
+    border-radius: 16px;
+    border: 2px solid var(--border);
+    padding: 1.5rem;
+    flex: 1;
+  }
+  .progress-list h3 {
+    font-family: var(--font-display);
+    margin-bottom: 1rem;
+    font-size: 1.3rem;
+  }
+  .progress-row {
+    display: grid;
+    grid-template-columns: 1.2rem 1fr 4rem;
+    align-items: center;
+    gap: 0.8rem;
+    margin-bottom: 0.8rem;
+  }
+  .progress-row .name { font-weight: 600; font-size: 0.95rem; }
+  .progress-row .pct {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    text-align: right;
+  }
+  .progress-row .bar {
+    grid-column: 1 / -1;
+    height: 8px;
+    background: var(--surface-2);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 0.2rem;
+  }
+  .progress-row .bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    transition: width 0.2s;
+  }
+  .progress-row .dot {
+    width: 12px; height: 12px; border-radius: 50%;
+  }
+  .progress-row.done .name::after { content: ' ✓'; color: var(--good); font-weight: 700; }
+
+  /* ═══════════════════ LEADERBOARD ═══════════════════ */
+  .leaderboard {
+    min-height: 100vh;
+    padding: 2rem;
+    max-width: 800px;
+    margin: 0 auto;
+    width: 100%;
+  }
+  .leaderboard h1 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    text-align: center;
+    margin-bottom: 0.3rem;
+    letter-spacing: -0.03em;
+  }
+  .leaderboard .sub {
+    text-align: center;
+    color: var(--text-dim);
+    margin-bottom: 2.5rem;
+    font-family: var(--font-mono);
+  }
+
+  .lb-row {
+    display: grid;
+    grid-template-columns: 3rem 1fr auto auto;
+    gap: 1rem;
+    align-items: center;
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 1rem 1.3rem;
+    margin-bottom: 0.6rem;
+    border-left: 6px solid var(--border);
+    animation: slideIn 0.4s ease-out backwards;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-20px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  .lb-row .rank {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 1.4rem;
+    color: var(--text-dim);
+  }
+  .lb-row .name { font-weight: 600; font-size: 1.1rem; }
+  .lb-row .delta {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--good);
+  }
+  .lb-row .pts {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 1.2rem;
+    color: var(--accent);
+  }
+  .lb-row.r1 { border-left-color: var(--accent); background: linear-gradient(90deg, rgba(255,214,10,0.1), var(--surface)); }
+  .lb-row.r2 { border-left-color: #c0c0c0; }
+  .lb-row.r3 { border-left-color: #cd7f32; }
+  .lb-row.me { border-left-color: var(--accent-2); background: linear-gradient(90deg, rgba(255,77,109,0.12), var(--surface)); }
+
+  .next-btn {
+    margin: 2rem auto 0;
+    display: block;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 12px;
+    padding: 1.1rem 2.5rem;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1.15rem;
+    cursor: pointer;
+    transition: transform 0.1s;
+  }
+  .next-btn:hover { transform: translateY(-2px); }
+
+  /* ═══════════════════ PODIUM ═══════════════════ */
+  .podium-screen {
+    min-height: 100vh;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    overflow: hidden;
+    position: relative;
+  }
+  .podium-screen h1 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: clamp(3rem, 8vw, 5.5rem);
+    margin-bottom: 0.3rem;
+    letter-spacing: -0.04em;
+  }
+  .podium-screen h1 span { color: var(--accent); }
+  .podium-screen .crown { font-size: 3rem; margin-bottom: 1rem; }
+
+  .podium {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 1rem;
+    margin: 3rem 0 2rem;
+    width: 100%;
+    max-width: 600px;
+  }
+  .podium-spot {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    animation: rise 0.8s ease-out backwards;
+  }
+  @keyframes rise {
+    from { transform: translateY(100px); opacity: 0; }
+    to   { transform: translateY(0);     opacity: 1; }
+  }
+  .podium-spot .pname {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1.2rem;
+    margin-bottom: 0.5rem;
+    word-break: break-word;
+    max-width: 100%;
+  }
+  .podium-spot .ppts {
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    margin-bottom: 0.8rem;
+  }
+  .podium-spot .block {
+    width: 100%;
+    border-radius: 12px 12px 0 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 1rem;
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 2.5rem;
+    color: var(--bg);
+  }
+  .podium-spot.s1 .block { background: var(--accent);   height: 220px; }
+  .podium-spot.s2 .block { background: #c0c0c0;         height: 160px; }
+  .podium-spot.s3 .block { background: #cd7f32;         height: 110px; }
+  .podium-spot.s1 { animation-delay: 0.6s; }
+  .podium-spot.s2 { animation-delay: 0.3s; }
+  .podium-spot.s3 { animation-delay: 0s; }
+
+  .runners-up {
+    margin-top: 2rem;
+    width: 100%;
+    max-width: 500px;
+  }
+  .runners-up .lb-row { animation-delay: 1s; }
+
+  .restart-btn {
+    margin-top: 2rem;
+    background: transparent;
+    border: 2px solid var(--border);
+    color: var(--text);
+    border-radius: 12px;
+    padding: 0.8rem 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+  .restart-btn:hover { border-color: var(--accent); }
+
+  /* Confetti-Effekt */
+  .confetti {
+    position: fixed;
+    top: -10px;
+    width: 8px; height: 16px;
+    pointer-events: none;
+    animation: fall 3s linear forwards;
+    z-index: 100;
+  }
+  @keyframes fall {
+    to { transform: translateY(110vh) rotate(720deg); }
+  }
+
+  /* Setup-Warnung */
+  .setup-warn {
+    background: var(--accent-2);
+    color: white;
+    padding: 1rem;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+  .setup-warn code {
+    background: rgba(0,0,0,0.3);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<!-- ═══════════════ FIREBASE SDKs (modular, via CDN) ═══════════════ -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getDatabase, ref, set, onValue, update, push, remove,
+  onDisconnect, serverTimestamp, get, child
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+/* ════════════════════════════════════════════════════════════════════════
+   ► HIER FIREBASE-CONFIG EINSETZEN ◄
+   Aus Firebase Console → Projekteinstellungen → Web-App
+   ════════════════════════════════════════════════════════════════════════ */
+const firebaseConfig = {
+  apiKey: "AIzaSyBMR8k15TKzK_1shcZz15MJzWv6cWH4_Ws",
+    authDomain: "tas-mikula.firebaseapp.com",
+    databaseURL: "https://tas-mikula-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "tas-mikula",
+    storageBucket: "tas-mikula.firebasestorage.app",
+    messagingSenderId: "121896967096",
+    appId: "1:121896967096:web:0b92c00dd41df33a3b4d4d",
+};
+/* ════════════════════════════════════════════════════════════════════════ */
+
+const SETUP_OK = !firebaseConfig.apiKey.startsWith("DEIN");
+
+let db = null;
+if (SETUP_OK) {
+  const app = initializeApp(firebaseConfig);
+  db = getDatabase(app);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SÄTZE — didaktisch aufsteigend, kurz & lustig
+// Aufbau folgt der Lernreihenfolge der gängigen Tipp-Trainer (TIPP10,
+// TippenAkademie, how-to-type): Grundreihe → Erweiterung → Oberreihe
+// → Unterreihe → Großbuchstaben → Mix mit Zeichensetzung.
+// ═══════════════════════════════════════════════════════════════════
+const SENTENCES = [
+  // 1-2: nur Grundreihe (asdf jklö) + naheliegend
+  { lesson: "Grundreihe", text: "ada lacht: hallo all" },
+  { lesson: "Grundreihe", text: "lass das alfa-faultier dosen falls" },
+
+  // 3-4: + Oberreihe (qwertzuiopü)
+  { lesson: "+ Oberreihe", text: "wer trinkt tee zur pause" },
+  { lesson: "+ Oberreihe", text: "der papa rappt etwas wirres" },
+
+  // 5-6: + Unterreihe (yxcvbnm)
+  { lesson: "+ Unterreihe", text: "max boxt zwei brave nilpferde" },
+  { lesson: "+ Unterreihe", text: "yvonne mag nasse banane mit zimt" },
+
+  // 7-8: + Großbuchstaben & Komma
+  { lesson: "+ Großschrift", text: "Tim und Lisa tanzen, Anna kichert." },
+  { lesson: "+ Großschrift", text: "Basel ist toll, Oltner Käse stinkt." },
+
+  // 9-10: alles inkl. Punkt, Komma, Bindestrich
+  { lesson: "Mix",          text: "Mein Hamster Kevin spielt E-Gitarre." },
+  { lesson: "Mix",          text: "Pommes-Frites mit Schoko? Niemals, nie!" }
+];
+
+// ═══════════════════════════════════════════════════════════════════
+// PUNKTE-FORMEL (Kahoot-inspiriert)
+// ═══════════════════════════════════════════════════════════════════
+// Basis: 1000 Punkte
+// Genauigkeit-Faktor: (richtige / gesamt) hoch 2  → Fehler bestrafen stark
+// Geschwindigkeitsfaktor: 0.5 + 0.5 * (1 - usedTime/maxTime)
+//    → wer in halber Zeit fertig ist, bekommt ~75% Speed-Bonus
+//    → wer das Limit ausschöpft, bekommt nur Basis ohne Bonus
+// Bonus: 200 Punkte für 100% fehlerfrei
+// ═══════════════════════════════════════════════════════════════════
+function calcPoints({ correct, total, errors, usedMs, maxMs }) {
+  if (total === 0) return 0;
+  const accuracy = correct / total;
+  if (accuracy < 0.5) return 0; // unter 50% → keine Punkte
+  const accFactor = Math.pow(accuracy, 2);
+  const speedFactor = 0.5 + 0.5 * Math.max(0, 1 - (usedMs / maxMs));
+  let pts = Math.round(1000 * accFactor * speedFactor);
+  if (errors === 0 && accuracy === 1) pts += 200;
+  return Math.max(0, pts);
+}
+
+const ROUND_TIME_MS = 30000; // 30 Sekunden pro Satz
+
+// ═══════════════════════════════════════════════════════════════════
+// HELPER
+// ═══════════════════════════════════════════════════════════════════
+function el(tag, attrs = {}, children = []) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v;
+    else if (k === 'style') e.style.cssText = v;
+    else if (k.startsWith('on')) e[k] = v;
+    else e.setAttribute(k, v);
+  }
+  (Array.isArray(children) ? children : [children]).forEach(c => {
+    if (c == null) return;
+    if (typeof c === 'string') e.appendChild(document.createTextNode(c));
+    else e.appendChild(c);
+  });
+  return e;
+}
+
+function genRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // ohne 0/O/I/1
+  let s = '';
+  for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random()*chars.length)];
+  return s;
+}
+function uid() { return Math.random().toString(36).slice(2, 10); }
+
+const PLAYER_COLORS = ['p1','p2','p3','p4','p5','p6','p7','p8'];
+function colorFor(idx) { return PLAYER_COLORS[idx % PLAYER_COLORS.length]; }
+
+// ═══════════════════════════════════════════════════════════════════
+// QR-CODE GENERATOR (minimal, ohne externe Lib — Google Charts API)
+// Fallback auf canvas-basierte Lösung wäre denkbar, aber Google Charts
+// reicht und ist superkompakt.
+// ═══════════════════════════════════════════════════════════════════
+function makeQR(text, size = 280) {
+  const url = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}&margin=10`;
+  return el('img', { src: url, alt: 'QR-Code', width: size, height: size });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// APP-STATE & ROUTING
+// ═══════════════════════════════════════════════════════════════════
+const root = document.getElementById('app');
+
+function clearRoot() {
+  while (root.firstChild) root.removeChild(root.firstChild);
+}
+
+function showSetupWarning() {
+  return el('div', { class: 'setup-warn' }, [
+    'Firebase ist noch nicht konfiguriert. Bitte ',
+    el('code', {}, 'firebaseConfig'),
+    ' in der HTML-Datei einsetzen (siehe Kommentar oben im File).'
+  ]);
+}
+
+// Routing über URL-Parameter
+const urlParams = new URLSearchParams(window.location.search);
+const joinRoomFromUrl = urlParams.get('room');
+
+if (!SETUP_OK) {
+  clearRoot();
+  root.appendChild(showSetupWarning());
+  renderStart();
+} else if (joinRoomFromUrl) {
+  renderJoin(joinRoomFromUrl);
+} else {
+  renderStart();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SCREEN: START
+// ═══════════════════════════════════════════════════════════════════
+function renderStart() {
+  const screen = el('div', { class: 'start' }, [
+    el('div', { class: 'logo' }, [
+      el('span', { class: 'type' }, 'TYPE'),
+      el('span', { class: 'battle' }, 'BATTLE'),
+      el('span', { class: 'dot' })
+    ]),
+    el('div', { class: 'tagline' }, '10-Finger-Duell für mutige Tipp-Held*innen'),
+    el('div', { class: 'role-cards' }, [
+      el('button', { class: 'role host', onclick: startAsHost }, [
+        el('div', { class: 'icon' }, '🎮'),
+        el('h2', {}, 'Spiel starten (Host)'),
+        el('p', {}, 'Lehrkraft / Beamer-Gerät. Erstellt einen Raum mit QR-Code für die Klasse.')
+      ]),
+      el('button', { class: 'role player', onclick: () => renderJoin(null) }, [
+        el('div', { class: 'icon' }, '⌨️'),
+        el('h2', {}, 'Mitspielen'),
+        el('p', {}, 'Schüler*in. Raumcode eingeben oder QR-Code scannen.')
+      ])
+    ])
+  ]);
+  clearRoot();
+  root.appendChild(screen);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SCREEN: JOIN (Player)
+// ═══════════════════════════════════════════════════════════════════
+function renderJoin(prefilledRoom) {
+  const errEl = el('div', { class: 'err' });
+  const roomInput = el('input', {
+    type: 'text', class: 'room-input', placeholder: 'RAUMCODE',
+    maxlength: '4', value: prefilledRoom || ''
+  });
+  const nameInput = el('input', { type: 'text', placeholder: 'Dein Name', maxlength: '14' });
+
+  const btn = el('button', { onclick: tryJoin }, 'Eintreten →');
+
+  async function tryJoin() {
+    errEl.textContent = '';
+    const room = roomInput.value.trim().toUpperCase();
+    const name = nameInput.value.trim();
+    if (!room || room.length !== 4) {
+      errEl.textContent = 'Raumcode hat 4 Buchstaben/Zahlen.';
+      return;
+    }
+    if (!name) {
+      errEl.textContent = 'Bitte einen Namen eingeben.';
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const snap = await get(ref(db, `rooms/${room}/state`));
+      if (!snap.exists()) {
+        errEl.textContent = 'Raum nicht gefunden.';
+        btn.disabled = false;
+        return;
+      }
+      const state = snap.val();
+      if (state.phase !== 'lobby') {
+        errEl.textContent = 'Spiel läuft schon — bitte aufs nächste warten.';
+        btn.disabled = false;
+        return;
+      }
+      const playerId = uid();
+      await set(ref(db, `rooms/${room}/players/${playerId}`), {
+        name, score: 0, lastDelta: 0,
+        progress: 0, status: 'idle', joinedAt: serverTimestamp()
+      });
+      // Bei disconnect: Spielername markieren (nicht löschen, damit Score erhalten bleibt)
+      onDisconnect(ref(db, `rooms/${room}/players/${playerId}/online`)).set(false);
+      await set(ref(db, `rooms/${room}/players/${playerId}/online`), true);
+      enterPlayerLoop(room, playerId, name);
+    } catch (e) {
+      console.error(e);
+      errEl.textContent = 'Fehler beim Beitreten. Stimmt der Code?';
+      btn.disabled = false;
+    }
+  }
+
+  const screen = el('div', { class: 'join' }, [
+    el('h1', {}, [el('span', {}, 'Type'), 'Battle']),
+    prefilledRoom
+      ? el('div', { class: 'room-pill' }, ['Raum: ', el('strong', {}, prefilledRoom)])
+      : null,
+    el('div', { class: 'input-group' }, [
+      prefilledRoom ? null : roomInput,
+      nameInput,
+      btn,
+      errEl
+    ])
+  ]);
+  clearRoot();
+  root.appendChild(screen);
+  setTimeout(() => (prefilledRoom ? nameInput : roomInput).focus(), 100);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// HOST: SPIEL ERSTELLEN
+// ═══════════════════════════════════════════════════════════════════
+async function startAsHost() {
+  if (!SETUP_OK) {
+    alert('Firebase muss zuerst konfiguriert werden.');
+    return;
+  }
+  // Eindeutigen Raumcode generieren (Wiederholung sehr unwahrscheinlich, aber wir prüfen)
+  let code, exists = true;
+  while (exists) {
+    code = genRoomCode();
+    const snap = await get(ref(db, `rooms/${code}/state`));
+    exists = snap.exists();
+  }
+  await set(ref(db, `rooms/${code}`), {
+    state: { phase: 'lobby', round: 0, createdAt: serverTimestamp() },
+    players: null,
+  });
+  // Räume nach 3h selbstaufräumen (best effort, läuft nur solange Host offen)
+  onDisconnect(ref(db, `rooms/${code}`)).remove();
+  enterHostLoop(code);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// HOST: HAUPTSCHLEIFE
+// ═══════════════════════════════════════════════════════════════════
+function enterHostLoop(roomCode) {
+  let players = {};
+  let state = { phase: 'lobby', round: 0 };
+
+  // Listener: Players & State
+  onValue(ref(db, `rooms/${roomCode}/players`), snap => {
+    players = snap.val() || {};
+    rerender();
+  });
+  onValue(ref(db, `rooms/${roomCode}/state`), snap => {
+    state = snap.val() || { phase: 'lobby', round: 0 };
+    rerender();
+  });
+
+  function rerender() {
+    if (state.phase === 'lobby')          renderHostLobby(roomCode, players);
+    else if (state.phase === 'playing')   renderHostGame(roomCode, players, state);
+    else if (state.phase === 'leaderboard') renderHostLeaderboard(roomCode, players, state);
+    else if (state.phase === 'podium')    renderHostPodium(roomCode, players);
+  }
+
+  rerender();
+}
+
+function renderHostLobby(roomCode, players) {
+  const playerList = Object.entries(players).filter(([id, p]) => p && p.online !== false);
+  const joinUrl = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+
+  const startBtn = el('button', {
+    class: 'start-game-btn',
+    onclick: () => startNextRound(roomCode, 1)
+  }, playerList.length === 0 ? 'Warte auf Spieler…' : `Spiel starten (${playerList.length} dabei)`);
+  if (playerList.length === 0) startBtn.disabled = true;
+
+  const playerGrid = el('div', { class: 'player-grid' });
+  playerList.forEach(([id, p], i) => {
+    const chip = el('div', { class: 'player-chip', style: `border-left-color: var(--${colorFor(i)})` }, p.name);
+    playerGrid.appendChild(chip);
+  });
+
+  clearRoot();
+  if (!SETUP_OK) root.appendChild(showSetupWarning());
+
+  root.appendChild(el('div', { class: 'lobby' }, [
+    el('div', { class: 'lobby-info' }, [
+      el('div', { class: 'room-label' }, 'Raumcode'),
+      el('div', { class: 'room-code' }, roomCode),
+      el('div', { class: 'qr-wrap' }, makeQR(joinUrl)),
+      el('div', { class: 'qr-hint' }, [
+        'oder: ', joinUrl.replace(/^https?:\/\//, '')
+      ])
+    ]),
+    el('div', { class: 'lobby-players' }, [
+      el('h2', {}, [
+        'Spieler*innen ',
+        el('span', { class: 'player-count' }, String(playerList.length))
+      ]),
+      playerList.length === 0
+        ? el('div', { style: 'color: var(--text-dim); padding: 2rem; text-align: center;' },
+            'QR-Code scannen oder Raumcode eingeben →')
+        : playerGrid,
+      startBtn
+    ])
+  ]));
+}
+
+async function startNextRound(roomCode, roundNum) {
+  if (roundNum > SENTENCES.length) {
+    // Spiel zu Ende → Podium
+    await update(ref(db, `rooms/${roomCode}/state`), { phase: 'podium' });
+    return;
+  }
+  const sentence = SENTENCES[roundNum - 1];
+  // Players auf "playing" setzen
+  const playersSnap = await get(ref(db, `rooms/${roomCode}/players`));
+  const players = playersSnap.val() || {};
+  const updates = {};
+  Object.keys(players).forEach(pid => {
+    updates[`players/${pid}/progress`] = 0;
+    updates[`players/${pid}/status`] = 'typing';
+    updates[`players/${pid}/lastDelta`] = 0;
+    updates[`players/${pid}/finishedAt`] = null;
+  });
+  updates['state'] = {
+    phase: 'playing',
+    round: roundNum,
+    sentence: sentence.text,
+    lesson: sentence.lesson,
+    startedAt: Date.now(),
+    durationMs: ROUND_TIME_MS
+  };
+  await update(ref(db, `rooms/${roomCode}`), updates);
+}
+
+function renderHostGame(roomCode, players, state) {
+  const playerList = Object.entries(players)
+    .filter(([id, p]) => p && p.online !== false)
+    .sort((a, b) => (b[1].score || 0) - (a[1].score || 0));
+
+  const elapsed = Date.now() - (state.startedAt || Date.now());
+  const remaining = Math.max(0, (state.durationMs || ROUND_TIME_MS) - elapsed);
+
+  // Auto-end wenn alle fertig oder Zeit abgelaufen
+  const allDone = playerList.length > 0 && playerList.every(([id, p]) => p.status === 'done');
+  const timeUp = remaining <= 0;
+  if ((allDone || timeUp) && state.phase === 'playing') {
+    setTimeout(() => endRound(roomCode, state.round), 800);
+  }
+
+  const targetText = renderTargetText(state.sentence || '', '');
+
+  const progressList = el('div', { class: 'progress-list' }, [
+    el('h3', {}, 'Live-Fortschritt')
+  ]);
+  playerList.forEach(([id, p], i) => {
+    const pct = Math.round((p.progress || 0) * 100);
+    const row = el('div', { class: 'progress-row' + (p.status === 'done' ? ' done' : '') }, [
+      el('div', { class: 'dot', style: `background: var(--${colorFor(i)})` }),
+      el('div', { class: 'name' }, p.name),
+      el('div', { class: 'pct' }, pct + '%'),
+      el('div', { class: 'bar' }, [
+        el('div', { class: 'bar-fill', style: `width: ${pct}%; background: var(--${colorFor(i)})` })
+      ])
+    ]);
+    progressList.appendChild(row);
+  });
+
+  clearRoot();
+  if (!SETUP_OK) root.appendChild(showSetupWarning());
+  root.appendChild(el('div', { class: 'host-game' }, [
+    el('div', { class: 'game-header' }, [
+      el('div', {}, [
+        el('span', { class: 'lesson-tag' }, state.lesson || ''),
+        el('div', { class: 'round-info', style: 'margin-top: 0.5rem' }, [
+          'Runde ', el('strong', {}, `${state.round}`), ` / ${SENTENCES.length}`
+        ])
+      ]),
+      el('div', { class: 'timer' + (remaining < 5000 ? ' warn' : '') },
+        Math.ceil(remaining / 1000) + 's')
+    ]),
+    el('div', { class: 'target-text' }, targetText),
+    progressList
+  ]));
+
+  // Timer-Update jede 200ms
+  if (state.phase === 'playing') {
+    if (window._hostTimer) clearTimeout(window._hostTimer);
+    window._hostTimer = setTimeout(() => renderHostGame(roomCode, players, state), 250);
+  }
+}
+
+async function endRound(roomCode, roundNum) {
+  // Stelle sicher, dass wir nicht doppelt enden
+  const stateSnap = await get(ref(db, `rooms/${roomCode}/state`));
+  const state = stateSnap.val();
+  if (!state || state.round !== roundNum || state.phase !== 'playing') return;
+  await update(ref(db, `rooms/${roomCode}/state`), { phase: 'leaderboard' });
+}
+
+function renderTargetText(target, typed) {
+  const wrap = el('span', {});
+  for (let i = 0; i < target.length; i++) {
+    let cls = 'ch ';
+    if (i < typed.length) {
+      cls += typed[i] === target[i] ? 'done' : 'wrong';
+    } else if (i === typed.length) {
+      cls += 'cur';
+    } else {
+      cls += 'todo';
+    }
+    const ch = target[i] === ' ' ? '\u00A0' : target[i];
+    wrap.appendChild(el('span', { class: cls }, ch));
+  }
+  return wrap;
+}
+
+function renderHostLeaderboard(roomCode, players, state) {
+  const playerList = Object.entries(players)
+    .filter(([id, p]) => p && p.online !== false)
+    .sort((a, b) => (b[1].score || 0) - (a[1].score || 0));
+
+  const isLast = state.round >= SENTENCES.length;
+
+  const list = el('div', {});
+  playerList.forEach(([id, p], i) => {
+    const rank = i + 1;
+    const cls = ['lb-row'];
+    if (rank === 1) cls.push('r1');
+    else if (rank === 2) cls.push('r2');
+    else if (rank === 3) cls.push('r3');
+    const row = el('div', { class: cls.join(' '), style: `animation-delay: ${i * 0.08}s` }, [
+      el('div', { class: 'rank' }, '#' + rank),
+      el('div', { class: 'name' }, p.name),
+      el('div', { class: 'delta' }, p.lastDelta > 0 ? `+${p.lastDelta}` : ''),
+      el('div', { class: 'pts' }, String(p.score || 0))
+    ]);
+    list.appendChild(row);
+  });
+
+  clearRoot();
+  if (!SETUP_OK) root.appendChild(showSetupWarning());
+  root.appendChild(el('div', { class: 'leaderboard' }, [
+    el('h1', {}, isLast ? 'Endstand' : 'Zwischenstand'),
+    el('div', { class: 'sub' }, `Nach Runde ${state.round} / ${SENTENCES.length}`),
+    list,
+    el('button', {
+      class: 'next-btn',
+      onclick: () => isLast
+        ? update(ref(db, `rooms/${roomCode}/state`), { phase: 'podium' })
+        : startNextRound(roomCode, state.round + 1)
+    }, isLast ? '🏆 Zum Podest' : `Weiter → Runde ${state.round + 1}`)
+  ]));
+}
+
+function renderHostPodium(roomCode, players) {
+  renderPodium(players, true, () => restartHostGame(roomCode));
+}
+
+async function restartHostGame(roomCode) {
+  // Score zurücksetzen, zurück zur Lobby
+  const playersSnap = await get(ref(db, `rooms/${roomCode}/players`));
+  const players = playersSnap.val() || {};
+  const updates = {};
+  Object.keys(players).forEach(pid => {
+    updates[`players/${pid}/score`] = 0;
+    updates[`players/${pid}/lastDelta`] = 0;
+    updates[`players/${pid}/progress`] = 0;
+    updates[`players/${pid}/status`] = 'idle';
+  });
+  updates['state'] = { phase: 'lobby', round: 0 };
+  await update(ref(db, `rooms/${roomCode}`), updates);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PLAYER: HAUPTSCHLEIFE
+// ═══════════════════════════════════════════════════════════════════
+function enterPlayerLoop(roomCode, playerId, name) {
+  let state = { phase: 'lobby', round: 0 };
+  let myPlayer = { name, score: 0 };
+  let allPlayers = {};
+  let lastPhaseRendered = null;
+  let lastRoundRendered = -1;
+
+  onValue(ref(db, `rooms/${roomCode}/state`), snap => {
+    state = snap.val() || { phase: 'lobby', round: 0 };
+    rerender();
+  });
+  onValue(ref(db, `rooms/${roomCode}/players`), snap => {
+    allPlayers = snap.val() || {};
+    myPlayer = allPlayers[playerId] || myPlayer;
+    rerender();
+  });
+
+  function rerender() {
+    // Re-render nur bei Phasenwechsel oder Rundenwechsel
+    const key = `${state.phase}-${state.round}`;
+    if (key === lastPhaseRendered) {
+      // Nur Leaderboard live aktualisieren bei phase 'leaderboard' oder 'podium'
+      if (state.phase === 'leaderboard' || state.phase === 'podium') return;
+      return;
+    }
+    lastPhaseRendered = key;
+    lastRoundRendered = state.round;
+
+    if (state.phase === 'lobby') renderPlayerWaiting(name);
+    else if (state.phase === 'playing') renderPlayerGame(roomCode, playerId, name, state);
+    else if (state.phase === 'leaderboard') renderPlayerLeaderboard(allPlayers, playerId, state);
+    else if (state.phase === 'podium') renderPlayerPodium(allPlayers, playerId);
+  }
+
+  rerender();
+}
+
+function renderPlayerWaiting(name) {
+  clearRoot();
+  root.appendChild(el('div', { class: 'waiting' }, [
+    el('div', { class: 'you' }, 'Du bist'),
+    el('div', { class: 'name' }, name),
+    el('div', { class: 'msg' }, [
+      el('span', { class: 'pulse-dot' }),
+      'Warte, bis die Lehrkraft das Spiel startet…'
+    ])
+  ]));
+}
+
+function renderPlayerGame(roomCode, playerId, name, state) {
+  const target = state.sentence || '';
+  const startedAt = state.startedAt || Date.now();
+  const maxMs = state.durationMs || ROUND_TIME_MS;
+
+  let typed = '';
+  let firstKeyAt = null;
+  let finished = false;
+
+  const targetEl = el('div', { class: 'target-text' }, renderTargetText(target, typed));
+  const textarea = el('textarea', {
+    rows: '2',
+    placeholder: 'Hier tippen — fang einfach an!',
+    autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off', spellcheck: 'false'
+  });
+  const progressFill = el('div', { class: 'progress-bar-fill' });
+  const timerEl = el('div', { class: 'timer' }, '30s');
+  const wpmEl = el('div', { class: 'v' }, '—');
+  const accEl = el('div', { class: 'v' }, '—');
+  const errEl = el('div', { class: 'v' }, '0');
+
+  const stage = el('div', {});
+  stage.appendChild(targetEl);
+  const inputArea = el('div', { class: 'input-area' }, [
+    textarea,
+    el('div', { class: 'progress-bar' }, progressFill)
+  ]);
+
+  function recompute() {
+    targetEl.replaceChildren(renderTargetText(target, typed));
+    const pct = Math.min(1, typed.length / target.length);
+    progressFill.style.width = (pct * 100) + '%';
+
+    let correct = 0, errors = 0;
+    for (let i = 0; i < typed.length; i++) {
+      if (i < target.length && typed[i] === target[i]) correct++;
+      else errors++;
+    }
+    const total = Math.max(typed.length, 1);
+    const acc = Math.round((correct / total) * 100);
+    const elapsed = firstKeyAt ? (Date.now() - firstKeyAt) / 1000 / 60 : 0;
+    const wpm = elapsed > 0 ? Math.round((correct / 5) / elapsed) : 0;
+    wpmEl.textContent = wpm;
+    accEl.textContent = acc + '%';
+    errEl.textContent = errors;
+
+    // Live-Update an Server (gedrosselt: nur alle 250ms)
+    if (!recompute._last || Date.now() - recompute._last > 250) {
+      recompute._last = Date.now();
+      update(ref(db, `rooms/${roomCode}/players/${playerId}`), { progress: pct });
+    }
+
+    // Fertig?
+    if (typed === target && !finished) {
+      finishRound();
+    }
+  }
+
+  textarea.addEventListener('input', e => {
+    if (finished) return;
+    if (!firstKeyAt) firstKeyAt = Date.now();
+    typed = textarea.value;
+    if (typed.length > target.length) typed = typed.substring(0, target.length);
+    textarea.value = typed;
+    recompute();
+  });
+
+  async function finishRound() {
+    finished = true;
+    textarea.disabled = true;
+    const usedMs = Date.now() - startedAt;
+    let correct = 0, errors = 0;
+    for (let i = 0; i < typed.length; i++) {
+      if (i < target.length && typed[i] === target[i]) correct++;
+      else errors++;
+    }
+    // Fehlende Zeichen zählen als Fehler (nur wenn Zeit abgelaufen)
+    const totalChars = target.length;
+    const points = calcPoints({
+      correct, total: totalChars, errors, usedMs, maxMs
+    });
+
+    // aktuellen Score holen, Punkte addieren
+    const playerSnap = await get(ref(db, `rooms/${roomCode}/players/${playerId}`));
+    const cur = playerSnap.val() || { score: 0 };
+    await update(ref(db, `rooms/${roomCode}/players/${playerId}`), {
+      score: (cur.score || 0) + points,
+      lastDelta: points,
+      progress: correct / totalChars,
+      status: 'done',
+      finishedAt: Date.now()
+    });
+
+    // Done-Anzeige
+    stage.replaceChildren(el('div', { class: 'done-msg' }, [
+      el('h2', {}, 'Fertig!'),
+      el('div', { class: 'points' }, '+' + points),
+      el('div', { style: 'color: var(--text-dim); font-family: var(--font-mono); margin-top: 1rem' },
+        `${correct}/${totalChars} richtig · ${errors} Fehler`)
+    ]));
+  }
+
+  // Timer
+  function tick() {
+    const remaining = Math.max(0, (startedAt + maxMs) - Date.now());
+    timerEl.textContent = Math.ceil(remaining / 1000) + 's';
+    timerEl.classList.toggle('warn', remaining < 5000);
+    if (remaining <= 0 && !finished) {
+      finishRound();
+      return;
+    }
+    if (!finished) requestAnimationFrame(tick);
+  }
+  tick();
+
+  clearRoot();
+  root.appendChild(el('div', { class: 'game' }, [
+    el('div', { class: 'game-header' }, [
+      el('div', {}, [
+        el('span', { class: 'lesson-tag' }, state.lesson || ''),
+        el('div', { class: 'round-info', style: 'margin-top: 0.5rem' }, [
+          'Runde ', el('strong', {}, `${state.round}`), ` / ${SENTENCES.length}`
+        ])
+      ]),
+      timerEl
+    ]),
+    stage,
+    inputArea,
+    el('div', { class: 'live-stats' }, [
+      el('div', { class: 'stat' }, [wpmEl, el('div', { class: 'l' }, 'WPM')]),
+      el('div', { class: 'stat' }, [accEl, el('div', { class: 'l' }, 'Genau')]),
+      el('div', { class: 'stat' }, [errEl, el('div', { class: 'l' }, 'Fehler')])
+    ])
+  ]));
+
+  setTimeout(() => textarea.focus(), 100);
+}
+
+function renderPlayerLeaderboard(allPlayers, myId, state) {
+  const playerList = Object.entries(allPlayers)
+    .filter(([id, p]) => p && p.online !== false)
+    .sort((a, b) => (b[1].score || 0) - (a[1].score || 0));
+
+  const isLast = state.round >= SENTENCES.length;
+
+  const list = el('div', {});
+  playerList.forEach(([id, p], i) => {
+    const rank = i + 1;
+    const cls = ['lb-row'];
+    if (id === myId) cls.push('me');
+    else if (rank === 1) cls.push('r1');
+    else if (rank === 2) cls.push('r2');
+    else if (rank === 3) cls.push('r3');
+    const row = el('div', { class: cls.join(' '), style: `animation-delay: ${i * 0.06}s` }, [
+      el('div', { class: 'rank' }, '#' + rank),
+      el('div', { class: 'name' }, p.name + (id === myId ? ' (du)' : '')),
+      el('div', { class: 'delta' }, p.lastDelta > 0 ? `+${p.lastDelta}` : ''),
+      el('div', { class: 'pts' }, String(p.score || 0))
+    ]);
+    list.appendChild(row);
+  });
+
+  clearRoot();
+  root.appendChild(el('div', { class: 'leaderboard' }, [
+    el('h1', {}, isLast ? 'Endstand' : 'Zwischenstand'),
+    el('div', { class: 'sub' }, `Nach Runde ${state.round} / ${SENTENCES.length}`),
+    list,
+    el('div', { style: 'text-align:center; color: var(--text-dim); margin-top: 2rem; font-family: var(--font-mono); font-size: 0.9rem' },
+      isLast ? '… gleich kommt das Podest' : 'Warte auf die nächste Runde…')
+  ]));
+}
+
+function renderPlayerPodium(allPlayers, myId) {
+  renderPodium(allPlayers, false, null, myId);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PODIUM (geteilt zwischen Host & Player)
+// ═══════════════════════════════════════════════════════════════════
+function renderPodium(allPlayers, isHost, onRestart, myId = null) {
+  const playerList = Object.entries(allPlayers)
+    .filter(([id, p]) => p)
+    .sort((a, b) => (b[1].score || 0) - (a[1].score || 0));
+
+  const top3 = playerList.slice(0, 3);
+  const rest = playerList.slice(3);
+
+  // Confetti
+  setTimeout(() => spawnConfetti(), 400);
+
+  const podium = el('div', { class: 'podium' });
+  // Reihenfolge: 2., 1., 3. (so steht Gold in der Mitte)
+  const order = [];
+  if (top3[1]) order.push({ ...top3[1][1], id: top3[1][0], spot: 's2', medal: '🥈' });
+  if (top3[0]) order.push({ ...top3[0][1], id: top3[0][0], spot: 's1', medal: '🥇' });
+  if (top3[2]) order.push({ ...top3[2][1], id: top3[2][0], spot: 's3', medal: '🥉' });
+
+  order.forEach(p => {
+    podium.appendChild(el('div', { class: 'podium-spot ' + p.spot }, [
+      el('div', { class: 'pname' }, p.name + (p.id === myId ? ' (du)' : '')),
+      el('div', { class: 'ppts' }, p.score + ' P.'),
+      el('div', { class: 'block' }, p.medal)
+    ]));
+  });
+
+  const restList = el('div', { class: 'runners-up' });
+  rest.forEach(([id, p], i) => {
+    const rank = i + 4;
+    const cls = ['lb-row'];
+    if (id === myId) cls.push('me');
+    restList.appendChild(el('div', { class: cls.join(' '), style: `animation-delay: ${1 + i * 0.1}s` }, [
+      el('div', { class: 'rank' }, '#' + rank),
+      el('div', { class: 'name' }, p.name + (id === myId ? ' (du)' : '')),
+      el('div', { class: 'delta' }, ''),
+      el('div', { class: 'pts' }, String(p.score || 0))
+    ]));
+  });
+
+  clearRoot();
+  root.appendChild(el('div', { class: 'podium-screen' }, [
+    el('div', { class: 'crown' }, '👑'),
+    el('h1', {}, [el('span', {}, 'Game'), ' Over']),
+    el('div', { style: 'color: var(--text-dim); font-family: var(--font-mono); letter-spacing: 0.1em' },
+      'Das Tipp-Duell ist entschieden'),
+    podium,
+    rest.length > 0 ? restList : null,
+    isHost ? el('button', { class: 'restart-btn', onclick: onRestart }, '↻ Neues Spiel mit gleichen Spielern') : null
+  ]));
+}
+
+function spawnConfetti() {
+  const colors = ['#ffd60a', '#ff4d6d', '#4ade80', '#38bdf8', '#c084fc', '#fb923c'];
+  for (let i = 0; i < 80; i++) {
+    const c = el('div', { class: 'confetti' });
+    c.style.left = Math.random() * 100 + 'vw';
+    c.style.background = colors[Math.floor(Math.random() * colors.length)];
+    c.style.animationDelay = Math.random() * 1.5 + 's';
+    c.style.animationDuration = (2 + Math.random() * 2) + 's';
+    c.style.transform = `rotate(${Math.random() * 360}deg)`;
+    document.body.appendChild(c);
+    setTimeout(() => c.remove(), 5000);
+  }
+}
+
+// Globaler Helper, damit ihn auch das Host-Game finden kann
+window.makeQR = makeQR;
+
+</script>
+</body>
+</html>
